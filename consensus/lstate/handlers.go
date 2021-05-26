@@ -89,6 +89,7 @@ func (mb *Handlers) Store(v interface{}) error {
 		if err != nil {
 			return err
 		}
+		roundState.txn = txn
 		switch obj := v.(type) {
 		case *objs.Proposal:
 			txHshLst := obj.TxHshLst
@@ -100,7 +101,7 @@ func (mb *Handlers) Store(v interface{}) error {
 			if err != nil {
 				return err
 			}
-			go mb.dm.DownloadTxs(txHshLst)
+			go mb.dm.DownloadTxs(roundState.height, roundState.round, txHshLst)
 		case *objs.PreVote:
 			err = roundState.SetPreVote(obj)
 			if err != nil {
@@ -170,14 +171,14 @@ func (mb *Handlers) Store(v interface{}) error {
 		case *objs.BlockHeader:
 			ownState := roundState.OwnState
 			if obj.BClaims.Height <= ownState.MaxBHSeen.BClaims.Height {
-				return errorz.ErrInvalid{}.New("stale bh  - <= MaxBHSeen")
+				return errorz.ErrInvalid{}.New("stale bh - <= MaxBHSeen")
 			}
 			if obj.BClaims.Height <= ownState.SyncToBH.BClaims.Height {
 				return errorz.ErrInvalid{}.New("stale bh - <= SyncTOBH ")
 			}
 			ownState.MaxBHSeen = obj
 		}
-		return mb.sstore.WriteState(txn, roundState)
+		return mb.sstore.WriteState(roundState)
 	})
 }
 

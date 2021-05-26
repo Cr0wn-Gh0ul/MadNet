@@ -410,6 +410,9 @@ func validatorNode(cmd *cobra.Command, args []string) {
 	defer gc.Close()
 	defer gh.Close()
 
+	go dman.Start()
+	defer dman.Close()
+
 	go stateRPC.Serve()
 	defer stateRPC.Close()
 

@@ -5,26 +5,22 @@ import (
 
 	"github.com/MadBase/MadNet/consensus/appmock"
 	"github.com/MadBase/MadNet/interfaces"
-	"github.com/MadBase/MadNet/utils"
-	lru "github.com/hashicorp/golang-lru"
 )
 
 type txCache struct {
-	sync.RWMutex
-	cache *lru.Cache
-	app   appmock.Application
+	sync.Mutex
+	app    appmock.Application
+	cache  map[string]string
+	rcache map[string]uint32
 }
 
-func (txc *txCache) init() error {
-	cache, err := lru.New(4096)
-	if err != nil {
-		return err
-	}
-	txc.cache = cache
+func (txc *txCache) Init() error {
+	txc.cache = make(map[string]string)
+	txc.rcache = make(map[string]uint32)
 	return nil
 }
 
-func (txc *txCache) add(tx interfaces.Transaction) error {
+func (txc *txCache) Add(height uint32, tx interfaces.Transaction) error {
 	txc.Lock()
 	defer txc.Unlock()
 	txHash, err := tx.TxHash()
@@ -35,37 +31,33 @@ func (txc *txCache) add(tx interfaces.Transaction) error {
 	if err != nil {
 		return err
 	}
-	txc.cache.Add(string(txHash), string(txb))
+	txc.rcache[string(txHash)] = height
+	txc.cache[string(txHash)] = string(txb)
 	return nil
 }
 
-func (txc *txCache) containsTxHsh(txHsh []byte) bool {
-	txc.RLock()
-	defer txc.RUnlock()
-	return txc.cache.Contains(string(txHsh))
-}
-
-func (txc *txCache) containsTx(tx interfaces.Transaction) (bool, error) {
-	txc.RLock()
-	defer txc.RUnlock()
-	txHsh, err := tx.TxHash()
-	if err != nil {
-		return false, err
+func (txc *txCache) Contains(txHsh []byte) bool {
+	txc.Lock()
+	defer txc.Unlock()
+	if _, ok := txc.getInternal(txHsh); ok {
+		return true
 	}
-	return txc.cache.Contains(string(txHsh)), nil
+	return false
 }
 
-func (txc *txCache) get(txHsh []byte) (interfaces.Transaction, bool) {
-	txc.RLock()
-	defer txc.RUnlock()
-	txIf, ok := txc.cache.Get(string(txHsh))
+func (txc *txCache) Get(txHsh []byte) (interfaces.Transaction, bool) {
+	txc.Lock()
+	defer txc.Unlock()
+	return txc.getInternal(txHsh)
+}
+
+func (txc *txCache) getInternal(txHsh []byte) (interfaces.Transaction, bool) {
+	txIf, ok := txc.cache[string(txHsh)]
 	if ok {
-		txb, ok := txIf.(string)
-		if !ok {
-			return nil, false
-		}
-		tx, err := txc.app.UnmarshalTx(utils.CopySlice([]byte(txb)))
+		txb := txIf
+		tx, err := txc.app.UnmarshalTx([]byte(txb))
 		if err != nil {
+			txc.delInternal(txHsh)
 			return nil, false
 		}
 		return tx, ok
@@ -73,49 +65,73 @@ func (txc *txCache) get(txHsh []byte) (interfaces.Transaction, bool) {
 	return nil, false
 }
 
-func (txc *txCache) getMany(txHashes [][]byte) ([]interfaces.Transaction, [][]byte) {
+func (txc *txCache) GetHeight(height uint32) ([]interfaces.Transaction, [][]byte) {
+	txc.Lock()
+	defer txc.Unlock()
+	out := []interfaces.Transaction{}
+	outhsh := [][]byte{}
+	for hash, rh := range txc.rcache {
+		hash, rh := hash, rh
+		if height == rh {
+			if txi, ok := txc.getInternal([]byte(hash)); ok {
+				out = append(out, txi)
+				outhsh = append(outhsh, []byte(hash))
+			}
+		}
+	}
+	return out, outhsh
+}
+
+/*
+
+func (txc *txCache) GetMany(txHashes [][]byte) ([]interfaces.Transaction, [][]byte) {
 	txc.RLock()
 	defer txc.RUnlock()
 	result := []interfaces.Transaction{}
 	missing := [][]byte{}
 	for i := 0; i < len(txHashes); i++ {
-		txIf, ok := txc.cache.Get(string(txHashes[i]))
-		if !ok {
-			continue
-		}
-		txb, ok := txIf.(string)
+		txIf, ok := txc.cache[string(txHashes[i])]
 		if !ok {
 			missing = append(missing, utils.CopySlice(txHashes[i]))
 			continue
 		}
-		tx, err := txc.app.UnmarshalTx(utils.CopySlice([]byte(txb)))
+		txb := txIf
+		tx, err := txc.app.UnmarshalTx([]byte(txb))
 		if err != nil {
 			missing = append(missing, utils.CopySlice(txHashes[i]))
+			delete(txc.cache, string(txHashes[i]))
 			continue
 		}
 		result = append(result, tx)
 	}
 	return result, missing
 }
+*/
 
-func (txc *txCache) removeTx(tx interfaces.Transaction) (bool, error) {
+func (txc *txCache) Del(txHsh []byte) {
 	txc.Lock()
 	defer txc.Unlock()
-	txHsh, err := tx.TxHash()
-	if err != nil {
-		return false, err
+	txc.delInternal(txHsh)
+}
+
+func (txc *txCache) delInternal(txHsh []byte) {
+	delete(txc.cache, string(txHsh))
+	delete(txc.rcache, string(txHsh))
+}
+
+func (txc *txCache) DropBeforeHeight(dropHeight uint32) []string {
+	out := []string{}
+	if dropHeight-256 > dropHeight {
+		return out
 	}
-	return txc.cache.Remove(string(txHsh)), nil
-}
-
-func (txc *txCache) del(txHsh []byte) bool {
 	txc.Lock()
 	defer txc.Unlock()
-	return txc.cache.Remove(string(txHsh))
-}
-
-func (txc *txCache) purge() {
-	txc.Lock()
-	defer txc.Unlock()
-	txc.cache.Purge()
+	for hash, height := range txc.rcache {
+		hash, height := hash, height
+		if height <= uint32(dropHeight) {
+			txc.delInternal([]byte(hash))
+			out = append(out, hash)
+		}
+	}
+	return out
 }

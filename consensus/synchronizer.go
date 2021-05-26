@@ -450,7 +450,7 @@ func (s *Synchronizer) adminInteruptLoop() {
 func (s *Synchronizer) setupLoops() {
 	stateLoopInSyncConfig := newLoopConfig().
 		withName("StateLoop-InSync").
-		withInitialDelay(9*constants.MsgTimeout).
+		withInitialDelay(3*constants.MsgTimeout).
 		withFn2(s.stateHandler.UpdateLocalState, s.madSyncDone.set).
 		withFreq(200 * time.Millisecond).
 		withDelayOnConditionFailure(200 * time.Millisecond).
